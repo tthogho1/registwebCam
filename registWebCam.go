@@ -6,15 +6,17 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net/http"
+	"os"
 	"strconv"
 	"sync"
 
+	"github.com/sirupsen/logrus"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 var (
-	max        int   = 60000
+	max        int   = 80000
 	offset_max int   = 50
 	offsets    []int = make([]int, max/offset_max)
 	increment  int   = 0
@@ -29,7 +31,17 @@ var (
 	wg sync.WaitGroup
 )
 
+var log = logrus.New()
+
 func main() {
+
+	// ファイル出力
+	file, err := os.OpenFile("c:\\temp\\logrus.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+	if err == nil {
+		log.Out = file
+	} else {
+		log.Info("Failed to log to file, using default stderr")
+	}
 
 	for i := 0; i < max/offset_max; i++ {
 		var t = i * offset_max
@@ -43,9 +55,8 @@ func main() {
 
 	increment = 0
 	for i := 0; i < 4; i++ {
-		go registerWebCameraToMongoDB(&wg)
-
 		wg.Add(1)
+		go registerWebCameraToMongoDB(&wg, i)
 	}
 
 	wg.Wait()
@@ -55,18 +66,14 @@ var (
 	mu sync.Mutex
 )
 
-func getOffset() int {
+func getOffset(increment *int) int {
 
-	if increment >= max/offset_max {
+	if *increment >= max/offset_max {
 		return -1
 	}
 
-	mu.Lock()
-	defer mu.Unlock()
-	t := offsets[increment]
-	increment++
-
-	fmt.Println("increment: ", increment)
+	fmt.Println("increment: ", *increment)
+	t := offsets[*increment]
 
 	return t
 }
@@ -157,10 +164,9 @@ type WebCameraInfo struct {
 	} `json:"result"`
 }
 
-func registerWebCameraToMongoDB(wg *sync.WaitGroup) {
+func registerWebCameraToMongoDB(wg *sync.WaitGroup, id int) {
 
 	defer wg.Done()
-
 	//  - バックグラウンドで接続する。タイムアウトは10秒
 	ctx := context.TODO()
 
@@ -175,28 +181,32 @@ func registerWebCameraToMongoDB(wg *sync.WaitGroup) {
 
 	for {
 		// offset 取得
-		offset := getOffset()
+		mu.Lock()
+		offset := getOffset(&increment)
+		increment++
+		mu.Unlock()
+
+		//fmt.Println(strconv.Itoa(id) + ":" + strconv.Itoa(offset))
 		if offset == -1 {
 			break
 		}
 
 		// url作成
-		url := baseurl + "offset=" + strconv.Itoa(offset) + parameters
+		url := baseurl + strconv.Itoa(offset) + parameters
+		fmt.Println(url)
 
-		//fmt.Println(url)
 		// リクエスト取得
 		resp, err := client.Get(url)
 		if err != nil {
 			panic(err)
 		}
-		defer resp.Body.Close()
+		//defer
 		// レスポンス取得
 		body, err := ioutil.ReadAll(resp.Body)
 		if err != nil {
 			panic(err)
 		}
-		//fmt.Println(resp.Status)
-		//fmt.Println(string(body))
+		resp.Body.Close()
 
 		var webCameraInfo WebCameraInfo
 		if err := json.Unmarshal(body, &webCameraInfo); err != nil {
@@ -213,7 +223,8 @@ func registerWebCameraToMongoDB(wg *sync.WaitGroup) {
 				panic(err)
 			}
 			fmt.Println(webCam.ID)
-			// fmt.Println(result.InsertedID)
+
+			log.Info(webCam.ID)
 		}
 
 		if result_len < offset_max {
