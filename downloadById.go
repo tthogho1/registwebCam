@@ -1,0 +1,140 @@
+package main
+
+import (
+	"bufio"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"strconv"
+
+	"github.com/sirupsen/logrus"
+)
+
+var (
+	requestUrl   string = "https://api.windy.com/webcams/api/v3/webcams/%s?lang=en&include=images"
+	logfileName  string = "c:\\temp\\logrus.log"
+	webCamIdFile string = "c:\\temp\\webcamid.txt"
+)
+
+var log = logrus.New()
+
+func main() {
+
+	// ファイル出力
+	file, err := os.OpenFile(logfileName, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+	if err == nil {
+		log.Out = file
+	} else {
+		log.Info("Failed to Open log to file, using default stderr")
+	}
+
+	// open File to read
+	webcamIds, _ := os.OpenFile(webCamIdFile, os.O_RDONLY, 0666)
+
+	// read webCamIds File by line and download image
+	scanner := bufio.NewScanner(webcamIds)
+	for scanner.Scan() {
+		webcamid := scanner.Text()
+		downloadImage(webcamid)
+		log.Info(webcamid)
+
+	}
+	if err := scanner.Err(); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func downloadImage(webcamid string) {
+	url := fmt.Sprintf(requestUrl, webcamid)
+
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		panic(err)
+	}
+
+	req.Header.Set("accept", "application/json")
+	req.Header.Set("x-windy-api-key", "4tpguJklGSjb3f0nVny1wwR9bqHquToz")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		panic(err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		panic(err)
+	}
+
+	jsonData := map[string]interface{}{}
+	err = json.Unmarshal(body, &jsonData)
+	if err != nil {
+		panic(err)
+	}
+
+	if jsonData["images"] == nil {
+		fmt.Println("no images")
+		return
+	}
+	images := jsonData["images"].(map[string]interface{})
+	if images["daylight"] == nil {
+		fmt.Println("no daylight images")
+		return
+	}
+	downloadUrl := images["daylight"].(map[string]interface{})["thumbnail"].(string)
+	if downloadUrl == "" {
+		fmt.Println("no download Url")
+		return
+	}
+
+	saveImageToLocal(downloadUrl, webcamid)
+
+	fmt.Println(downloadUrl)
+}
+
+var (
+	saveFolder string = "c:\\temp\\images\\"
+)
+
+func saveImageToLocal(downloadUrl string, webcamid string) {
+
+	// リクエストを作成
+	req, err := http.NewRequest("GET", downloadUrl, nil)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	// ヘッダーを追加
+	req.Header.Add("Accept", "application/json")
+	req.Header.Add("x-windy-api-key", "4tpguJklGSjb3f0nVny1wwR9bqHquToz")
+
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	defer res.Body.Close()
+	data, err := io.ReadAll(res.Body)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	if res.StatusCode != 200 {
+		fmt.Println("Status Code is " + strconv.Itoa(res.StatusCode))
+		log.Info("Status Code is " + strconv.Itoa(res.StatusCode))
+		return
+	}
+
+	// write data to file
+	err = os.WriteFile(saveFolder+webcamid+".jpg", data, 0644)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+}
