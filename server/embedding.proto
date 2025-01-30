@@ -1,0 +1,24 @@
+// embedding.proto
+syntax = "proto3";
+
+package embedding;
+option go_package = "./pb";
+
+// 画像エンベディングサービスの定義
+service EmbeddingService {
+  // 画像をアップロードしてエンベディングを取得
+  rpc GetEmbedding (ImageRequest) returns (EmbeddingResponse) {}
+}
+
+// 画像リクエストメッセージ
+message ImageRequest {
+  bytes image_data = 1;
+  string filename = 2;
+}
+
+// エンベディングレスポンスメッセージ
+message EmbeddingResponse {
+  bool success = 1;
+  repeated float embeddings = 2;
+  string error = 3;
+}

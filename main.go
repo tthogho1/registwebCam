@@ -1,4 +1,4 @@
-//package main
+package main
 
 import (
 	"context"
@@ -8,10 +8,12 @@ import (
 	"net/http"
 	"os"
 	"strconv"
-	"sync"
 
+	"registWebCam/util"
 	"registWebCam/webcam"
 
+	"github.com/joho/godotenv"
+	"github.com/labstack/gommon/log"
 	"github.com/sirupsen/logrus"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
@@ -20,51 +22,48 @@ import (
 var (
 	offset_max int = 50
 	increment  int = 0
-	maxThreads int = 4
 )
 
 var (
-	baseurl     string = "https://api.windy.com/webcams/api/v3/webcams?lang=en&limit=" + strconv.Itoa(offset_max) + "&offset=%s&regions=%s"
-	parameters  string = "&sortDirection=asc&include=categories,images,location,player"
-	logfileName string = "c:\\temp\\logrus.log"
+	baseurl    string = "https://api.windy.com/webcams/api/v3/webcams?lang=en&limit=" + strconv.Itoa(offset_max) + "&offset=%s&regions=%s"
+	parameters string = "&sortDirection=asc&include=categories,images,location,player"
+	logfile    string = "c:\\temp\\logrus.log"
 
 	requestUrl string = baseurl + parameters
-
-	wg sync.WaitGroup
 )
 
-var log = logrus.New()
+var logger = logrus.New()
 
 func main() {
 
+	err := godotenv.Load(".env") // .envファイルを読み込む
+	if err != nil {
+		panic(err)
+	}
+
 	// ファイル出力
-	file, err := os.OpenFile(logfileName, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+	file, err := os.OpenFile(logfile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
 	if err == nil {
-		log.Out = file
+		logger.Out = file
 	} else {
-		log.Info("Failed to Open log to file, using default stderr")
+		logger.Info("Failed to Open log to file, using default stderr")
 	}
 
 	regionCodes := extractRegionCode()
-	log.Println(regionCodes)
+	logger.Println(regionCodes)
 	//fmt.Println(regionCodes)
 
 	for _, regionCode := range regionCodes {
-		/*for i := 0; i < maxThreads; i++ {
-			wg.Add(1)
-			go registerWebCameraToMongoDB(&wg, i, regionCode)
-		}
-		wg.Wait() */
 		increment = 0
 
-		registerWebCameraToMongoDB(&wg, 0, regionCode)
-		log.Println(regionCode)
+		registerWebCameraToMongoDB(0, regionCode)
+		logger.Println(regionCode)
 	}
 
 }
 
 var (
-	mu sync.Mutex
+	mongouri string = "mongodb+srv://webcam:webcam@cluster0.pizmgb2.mongodb.net/?retryWrites=true&w=majority"
 )
 
 func extractRegionCode() []string {
@@ -76,7 +75,9 @@ func extractRegionCode() []string {
 	}
 
 	req.Header.Set("accept", "application/json")
-	req.Header.Set("x-windy-api-key", "4tpguJklGSjb3f0nVny1wwR9bqHquToz")
+
+	WINDY_API_KEY := os.Getenv("WINDY_API_KEY")
+	req.Header.Set("x-windy-api-key", WINDY_API_KEY)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -105,7 +106,7 @@ func extractRegionCode() []string {
 	return codes
 }
 
-func registerWebCameraToMongoDB(wg *sync.WaitGroup, id int, regionCode string) {
+func registerWebCameraToMongoDB(id int, regionCode string) {
 
 	// defer wg.Done()
 	//  - バックグラウンドで接続する。タイムアウトは10秒
@@ -118,14 +119,15 @@ func registerWebCameraToMongoDB(wg *sync.WaitGroup, id int, regionCode string) {
 		panic(err)
 	}
 
-	coll := con.Database("webcam").Collection("webcam")
+	WEBCAM_DB := os.Getenv("WEBCAM_DB")
+	WEBCAM_COLLECTION := os.Getenv("WEBCAM_COLLECTION")
+	coll := con.Database(WEBCAM_DB).Collection(WEBCAM_COLLECTION)
+	//rpgClient, _ := util.CreateClient()
 
 	for {
 		// offset 取得
-		mu.Lock()
 		offset := increment * offset_max
 		increment++
-		mu.Unlock()
 
 		// url作成
 		url := fmt.Sprintf(requestUrl, strconv.Itoa(offset), regionCode)
@@ -140,7 +142,8 @@ func registerWebCameraToMongoDB(wg *sync.WaitGroup, id int, regionCode string) {
 
 		// ヘッダーを追加
 		req.Header.Add("Accept", "application/json")
-		req.Header.Add("x-windy-api-key", "4tpguJklGSjb3f0nVny1wwR9bqHquToz")
+		WINDY_API_KEY := os.Getenv("WINDY_API_KEY")
+		req.Header.Add("x-windy-api-key", WINDY_API_KEY)
 
 		// リクエストを送信
 		res, err := http.DefaultClient.Do(req)
@@ -173,10 +176,25 @@ func registerWebCameraToMongoDB(wg *sync.WaitGroup, id int, regionCode string) {
 
 		for _, webCam := range webCameraInfo.Webcams {
 
-			_, err := coll.InsertOne(ctx, webCam)
+			var webCamWithEmd webcam.WebcamWithEmbedding
+			webCamWithEmd.Webcam = webCam
+
+			imgUrl := webCam.Images.Daylight.Thumbnail
+			//var imageData []byte
+			if imgUrl != "" {
+				// 画像をダウンロード
+				//imageData = util.GetImage(imgUrl)
+				util.GetImage(imgUrl)
+			}
+			filename := "image_" + strconv.Itoa(webCam.WebcamID) + ".jpg"
+			print(filename)
+			//webCamWithEmd.Embedding = util.GetEmbedding(rpgClient, imageData, filename)
+
+			_, err := coll.InsertOne(ctx, webCamWithEmd)
 			if err != nil {
 				panic(err)
 			}
+
 			//fmt.Println(webCam.WebcamID)
 			log.Info(webCam.WebcamID)
 			fmt.Println(webCam.WebcamID)
@@ -190,7 +208,3 @@ func registerWebCameraToMongoDB(wg *sync.WaitGroup, id int, regionCode string) {
 
 	}
 }
-
-var (
-	mongouri string = "mongodb+srv://webcam:webcam@cluster0.pizmgb2.mongodb.net/?retryWrites=true&w=majority"
-)
