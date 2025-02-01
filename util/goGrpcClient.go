@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"os"
 	"time"
 
 	pb "registWebCam/pb"
@@ -27,12 +26,6 @@ func CreateClient() (pb.EmbeddingServiceClient, error) {
 
 func GetEmbedding(client pb.EmbeddingServiceClient, imageData []byte, filename string) (imgEmbeddng []float32) {
 
-	// 画像ファイルを読み込む
-	imageData, err := os.ReadFile(os.Args[1])
-	if err != nil {
-		log.Fatalf("Failed to read image file: %v", err)
-	}
-
 	// コンテキストを作成
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
 	defer cancel()
@@ -40,7 +33,7 @@ func GetEmbedding(client pb.EmbeddingServiceClient, imageData []byte, filename s
 	// リクエストを作成して送信
 	req := &pb.ImageRequest{
 		ImageData: imageData,
-		Filename:  os.Args[1],
+		Filename:  filename,
 	}
 
 	// 開始時間を取得

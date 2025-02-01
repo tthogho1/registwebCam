@@ -15,6 +15,7 @@ import (
 	"github.com/joho/godotenv"
 	"github.com/labstack/gommon/log"
 	"github.com/sirupsen/logrus"
+	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
@@ -33,6 +34,7 @@ var (
 )
 
 var logger = logrus.New()
+var WINDY_API_KEY string
 
 func main() {
 
@@ -40,6 +42,7 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
+	WINDY_API_KEY = os.Getenv("WINDY_API_KEY")
 
 	// ファイル出力
 	file, err := os.OpenFile(logfile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
@@ -51,12 +54,11 @@ func main() {
 
 	regionCodes := extractRegionCode()
 	logger.Println(regionCodes)
-	//fmt.Println(regionCodes)
 
 	for _, regionCode := range regionCodes {
 		increment = 0
 
-		registerWebCameraToMongoDB(0, regionCode)
+		extractAndRegistWebCamToMongoDB(0, regionCode)
 		logger.Println(regionCode)
 	}
 
@@ -75,8 +77,6 @@ func extractRegionCode() []string {
 	}
 
 	req.Header.Set("accept", "application/json")
-
-	WINDY_API_KEY := os.Getenv("WINDY_API_KEY")
 	req.Header.Set("x-windy-api-key", WINDY_API_KEY)
 
 	resp, err := http.DefaultClient.Do(req)
@@ -102,13 +102,85 @@ func extractRegionCode() []string {
 		}
 	}
 
-	//fmt.Println(codes)
 	return codes
 }
 
-func registerWebCameraToMongoDB(id int, regionCode string) {
+func extractWebCamData(url string) []byte {
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		fmt.Println(err)
+		return nil
+	}
+	// ヘッダーを追加
+	req.Header.Add("Accept", "application/json")
+	req.Header.Add("x-windy-api-key", WINDY_API_KEY)
 
-	// defer wg.Done()
+	// リクエストを送信
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		fmt.Println(err)
+		return nil
+	}
+	data, err := io.ReadAll(res.Body)
+	if err != nil {
+		fmt.Println(err)
+		return nil
+	}
+
+	if res.StatusCode != 200 {
+		fmt.Println("Status Code is " + strconv.Itoa(res.StatusCode) + " Body is " + string(data))
+		log.Info("Status Code is " + strconv.Itoa(res.StatusCode) + " Body is " + string(data))
+		return nil
+	}
+	res.Body.Close()
+
+	return data
+}
+
+func registWebCamToMongoDB(data []byte, coll *mongo.Collection, ctx context.Context) {
+
+	var webCameraInfo webcam.WebCameraInfo
+	if err := json.Unmarshal(data, &webCameraInfo); err != nil {
+		panic(err)
+	}
+
+	for _, webCam := range webCameraInfo.Webcams {
+
+		result := coll.FindOne(context.TODO(), bson.M{"webcamid": webCam.WebcamID})
+		if result.Err() != mongo.ErrNoDocuments {
+			continue
+		}
+
+		var webCamWithEmd webcam.WebcamWithEmbedding
+		webCamWithEmd.Webcam = webCam
+
+		imgUrl := webCam.Images.Daylight.Thumbnail
+		var imageData []byte
+		if imgUrl != "" {
+			// 画像をダウンロード
+			imageData = util.GetImage(imgUrl)
+			util.GetImage(imgUrl)
+		}
+		filename := strconv.Itoa(webCam.WebcamID) + ".jpg"
+		print(filename)
+
+		// upload to S3
+		util.UploadS3(imageData, filename)
+
+		rpgClient, _ := util.CreateClient()
+		webCamWithEmd.Embedding = util.GetEmbedding(rpgClient, imageData, filename)
+
+		_, err := coll.InsertOne(ctx, webCamWithEmd)
+		if err != nil {
+			panic(err)
+		}
+		log.Info(webCam.WebcamID)
+		fmt.Println(webCam.WebcamID)
+	}
+}
+
+func extractAndRegistWebCamToMongoDB(id int, regionCode string) {
+
 	//  - バックグラウンドで接続する。タイムアウトは10秒
 	ctx := context.TODO()
 
@@ -122,7 +194,6 @@ func registerWebCameraToMongoDB(id int, regionCode string) {
 	WEBCAM_DB := os.Getenv("WEBCAM_DB")
 	WEBCAM_COLLECTION := os.Getenv("WEBCAM_COLLECTION")
 	coll := con.Database(WEBCAM_DB).Collection(WEBCAM_COLLECTION)
-	//rpgClient, _ := util.CreateClient()
 
 	for {
 		// offset 取得
@@ -133,35 +204,8 @@ func registerWebCameraToMongoDB(id int, regionCode string) {
 		url := fmt.Sprintf(requestUrl, strconv.Itoa(offset), regionCode)
 		fmt.Println(url)
 
-		// リクエストを作成
-		req, err := http.NewRequest("GET", url, nil)
-		if err != nil {
-			fmt.Println(err)
-			return
-		}
-
-		// ヘッダーを追加
-		req.Header.Add("Accept", "application/json")
-		WINDY_API_KEY := os.Getenv("WINDY_API_KEY")
-		req.Header.Add("x-windy-api-key", WINDY_API_KEY)
-
-		// リクエストを送信
-		res, err := http.DefaultClient.Do(req)
-		if err != nil {
-			fmt.Println(err)
-			return
-		}
-
-		// レスポンスを取得
-		data, err := io.ReadAll(res.Body)
-		if err != nil {
-			fmt.Println(err)
-			return
-		}
-
-		if res.StatusCode != 200 {
-			fmt.Println("Status Code is " + strconv.Itoa(res.StatusCode) + " Body is " + string(data))
-			log.Info("Status Code is " + strconv.Itoa(res.StatusCode) + " Body is " + string(data))
+		data := extractWebCamData(url)
+		if data == nil {
 			break
 		}
 
@@ -169,42 +213,15 @@ func registerWebCameraToMongoDB(id int, regionCode string) {
 		if err := json.Unmarshal(data, &webCameraInfo); err != nil {
 			panic(err)
 		}
-		res.Body.Close()
-
 		result_len := len(webCameraInfo.Webcams)
 		fmt.Println("Id : " + strconv.Itoa(id) + " data length : " + strconv.Itoa(result_len))
 
-		for _, webCam := range webCameraInfo.Webcams {
-
-			var webCamWithEmd webcam.WebcamWithEmbedding
-			webCamWithEmd.Webcam = webCam
-
-			imgUrl := webCam.Images.Daylight.Thumbnail
-			//var imageData []byte
-			if imgUrl != "" {
-				// 画像をダウンロード
-				//imageData = util.GetImage(imgUrl)
-				util.GetImage(imgUrl)
-			}
-			filename := "image_" + strconv.Itoa(webCam.WebcamID) + ".jpg"
-			print(filename)
-			//webCamWithEmd.Embedding = util.GetEmbedding(rpgClient, imageData, filename)
-
-			_, err := coll.InsertOne(ctx, webCamWithEmd)
-			if err != nil {
-				panic(err)
-			}
-
-			//fmt.Println(webCam.WebcamID)
-			log.Info(webCam.WebcamID)
-			fmt.Println(webCam.WebcamID)
-		}
+		registWebCamToMongoDB(data, coll, ctx)
 
 		if result_len < offset_max {
 			fmt.Println("exit Id : " + strconv.Itoa(id) + " data length : " + strconv.Itoa(result_len))
 			fmt.Println(webCameraInfo.Webcams)
 			break
 		}
-
 	}
 }
