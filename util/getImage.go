@@ -8,6 +8,8 @@ import (
 	"strconv"
 )
 
+var WINDY_API_KEY = os.Getenv("WINDY_API_KEY")
+
 func GetImage(downloadUrl string) (data []byte) {
 
 	// リクエストを作成
@@ -19,8 +21,6 @@ func GetImage(downloadUrl string) (data []byte) {
 
 	// ヘッダーを追加
 	req.Header.Add("Accept", "application/json")
-	WINDY_API_KEY := os.Getenv("WINDY_API_KEY")
-
 	req.Header.Add("x-windy-api-key", WINDY_API_KEY)
 
 	res, err := http.DefaultClient.Do(req)
