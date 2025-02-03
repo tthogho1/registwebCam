@@ -40,14 +40,14 @@ func GetEmbedding(client pb.EmbeddingServiceClient, imageData []byte, filename s
 	startTime := time.Now()
 	resp, err := client.GetEmbedding(ctx, req)
 	if err != nil {
-		log.Fatalf("Failed to get embedding: %v", err)
+		log.Printf("Failed to get embedding: %v", err)
 	}
 
 	endTime := time.Now()
 	fmt.Printf("Elapsed time: %v\n", endTime.Sub(startTime))
 
 	if !resp.Success {
-		log.Fatalf("Server error: %s", resp.Error)
+		log.Printf("Server error: %s", resp.Error)
 	}
 
 	fmt.Printf("Successfully got embeddings of length: %d\n", len(resp.Embeddings))
