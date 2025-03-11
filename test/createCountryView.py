@@ -28,12 +28,14 @@ try:
             {
                 "$group": {
                     "_id": "$location.country",
+                    "code": { "$first": "$location.countrycode" },
                     "country": { "$first": "$location.country" }
                 }
             },
             {
                 "$project": {
                     "_id": 0,
+                    "code": 1,
                     "country": 1
                 }
             }
